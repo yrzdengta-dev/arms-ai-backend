@@ -1,0 +1,17 @@
+skill_id: simple_text_consistency
+version: 1.0.0
+enabled: true
+priority: 90
+match:
+  scene_ids: ["7"]
+  audit_point_ids: ["9"]
+  certificate_type_ids: ["1"]
+  industry_ids: []
+  category_ids: []
+  business_type: null
+required_inputs:
+  - order_snapshot
+  - pdf_text
+prompt_file: prompt.md
+rules_file: rules.yaml
+output_schema: audit_result_v1

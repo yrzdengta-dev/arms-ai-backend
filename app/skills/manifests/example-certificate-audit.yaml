@@ -1,0 +1,15 @@
+skill_id: example-certificate-audit
+version: 1.0.0
+enabled: false
+priority: 100
+match:
+  scene_ids: ["7"]
+  audit_point_ids: ["9"]
+  certificate_type_ids: ["1", "2", "3"]
+  industry_ids: ["1", "2"]
+  category_ids: []
+required_inputs:
+  - order_snapshot
+  - pdf_text
+prompt_file: example-certificate-audit.md
+output_schema: audit_result_v1

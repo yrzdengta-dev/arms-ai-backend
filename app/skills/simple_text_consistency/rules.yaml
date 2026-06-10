@@ -1,0 +1,35 @@
+rules:
+  - id: MATCH_SKC
+    type: exact_match
+    description: "SKC must exactly match certificate"
+    source_field: skc
+    required: true
+
+  - id: MATCH_PRODUCT_NAME
+    type: normalized_match
+    description: "Product name should match after normalization"
+    source_field: product_name
+    required: false
+
+  - id: MATCH_CERTIFICATE_SN
+    type: contains_match
+    description: "Certificate SN should appear in PDF"
+    source_field: certificate_sn
+    required: false
+
+  - id: MATCH_EFFECTIVE_DATE
+    type: date_match
+    description: "Effective date should match PDF"
+    source_field: certificate_effective_date
+    required: false
+
+  - id: MATCH_EXPIRE_DATE
+    type: date_match
+    description: "Expire date should match PDF"
+    source_field: certificate_expire_date
+    required: false
+
+  - id: CHECK_REQUIRED_FIELDS
+    type: required_check
+    description: "All required fields present"
+    required: true
