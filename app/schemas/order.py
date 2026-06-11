@@ -44,8 +44,12 @@ class OrderListItem(BaseModel):
     business_status: str | None = None
     order_version: int
     decision: str | None = None
+    human_decision: str | None = None
+    confirmed_at: datetime | None = None
     skc: str | None = ""
     product_name: str | None = ""
+    supplier_name: str | None = ""
+    certificate_type_name: str | None = ""
     created_at: datetime
     updated_at: datetime
 
@@ -72,6 +76,10 @@ class OrderDetailResponse(BaseModel):
     detail_hash: str | None = None
     order_snapshot: dict[str, Any] | None = None
     raw_detail: dict[str, Any] | None = None
+    human_decision: str | None = None
+    correction_history: list[dict[str, Any]] | None = None
+    confirmed_by: str | None = None
+    confirmed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -102,6 +110,9 @@ class OrderResultResponse(BaseModel):
     task_order_id: str
     pipeline_status: str
     decision: str | None = None
+    human_decision: str | None = None
+    correction_history: list[dict[str, Any]] | None = None
+    confirmed_at: datetime | None = None
     summary: str | None = None
     rules: list[RuleResultItem] = []
     model_provider: str | None = None
@@ -111,3 +122,57 @@ class OrderResultResponse(BaseModel):
     prompt_hash: str | None = None
     order_version: int
     updated_at: datetime
+
+
+# ---- Human Correction (P0) ----
+
+from typing import Literal
+
+CorrectionDecision = Literal["PASS", "REJECT", "MANUAL_REVIEW"]
+
+
+class CorrectionRequest(BaseModel):
+    decision: CorrectionDecision  # type: ignore[valid-type]
+    reason: str = Field(..., min_length=1, max_length=500)
+    operator: str | None = None
+
+
+class CorrectionHistoryEntry(BaseModel):
+    operated_at: datetime
+    operator: str
+    from_decision: str
+    to_decision: str
+    reason: str
+
+
+class CorrectionResponse(BaseModel):
+    task_order_id: str
+    ai_decision: str | None = None
+    human_result: str | None = None
+    correction_history: list[CorrectionHistoryEntry] = []
+    pipeline_status: str
+
+
+# ---- Batch Confirm (P0) ----
+
+class BatchConfirmRequest(BaseModel):
+    task_order_ids: list[str] = Field(..., min_length=1, max_length=200)
+
+
+class BatchConfirmResultItem(BaseModel):
+    task_order_id: str
+    status: str  # confirmed | already_confirmed | skipped
+    confirmed_at: datetime | None = None
+    reason: str | None = None  # only for skipped
+
+
+class BatchConfirmSummary(BaseModel):
+    total: int
+    confirmed: int = 0
+    already_confirmed: int = 0
+    skipped: int = 0
+
+
+class BatchConfirmResponse(BaseModel):
+    results: list[BatchConfirmResultItem]
+    summary: BatchConfirmSummary

@@ -3,12 +3,17 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.identity import get_current_user
+from app.core.identity import can_view_all_orders, get_current_user
 from app.models.user import User
-from app.repositories.order_repository import order_repository
+from app.repositories.order_repository import Scope, order_repository
 from app.schemas.order import (
+    BatchConfirmRequest,
+    BatchConfirmResponse,
     BatchIngestRequest,
+    CorrectionRequest,
+    CorrectionResponse,
     OrderDetailResponse,
     OrderIngestRequest,
     OrderIngestResponse,
@@ -17,10 +22,20 @@ from app.schemas.order import (
     OrderResultResponse,
     OrderStatsResponse,
 )
+from app.services.correction_service import correction_service
 from app.services.order_service import CrossUserConflictError, order_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _get_scope(user: User) -> Scope:
+    """Compute read scope from user and settings."""
+    settings = get_settings()
+    if can_view_all_orders(user, settings.admin_account_set):
+        logger.info("Admin read scope: user=%s viewing all orders", user.arms_account)
+        return "all"
+    return "own"
 
 
 @router.post("/ingest", response_model=OrderIngestResponse, status_code=status.HTTP_200_OK)
@@ -53,7 +68,13 @@ async def batch_ingest(
 ):
     results = []
     for item in request.orders:
-        order, created = await order_service.ingest(db, item, current_user)
+        try:
+            order, created = await order_service.ingest(db, item, current_user)
+        except CrossUserConflictError as e:
+            raise HTTPException(
+                status_code=409,
+                detail=f"task_order_id={e.task_order_id} already belongs to another user",
+            ) from e
         results.append(
             OrderIngestResponse(
                 order_id=order.id,
@@ -79,6 +100,7 @@ async def list_orders(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    scope = _get_scope(current_user)
     skip = (page - 1) * page_size
     orders = await order_repository.list_orders(
         db,
@@ -91,6 +113,7 @@ async def list_orders(
         scene_id=scene_id,
         audit_point_id=audit_point_id,
         search=search,
+        scope=scope,
     )
     total = await order_repository.count_orders(
         db,
@@ -101,7 +124,21 @@ async def list_orders(
         scene_id=scene_id,
         audit_point_id=audit_point_id,
         search=search,
+        scope=scope,
     )
+
+    # Query latest decision for each order
+    from sqlalchemy import select
+
+    from app.models.audit_result import AuditResult
+
+    decision_stmt = select(
+        AuditResult.order_id,
+        AuditResult.order_version,
+        AuditResult.decision,
+    ).where(AuditResult.order_id.in_([o.id for o in orders]))
+    decision_rows = (await db.execute(decision_stmt)).all()
+    decision_map = {(row[0], row[1]): row[2] for row in decision_rows}
 
     items = [
         OrderListItem(
@@ -113,9 +150,13 @@ async def list_orders(
             pipeline_status=o.pipeline_status,
             business_status=o.business_status,
             order_version=o.order_version,
-            decision=None,
+            decision=decision_map.get((o.id, o.order_version)),
+            human_decision=o.human_decision,
+            confirmed_at=o.confirmed_at,
             skc=(o.order_snapshot or {}).get("skc", ""),
             product_name=(o.order_snapshot or {}).get("product_name", ""),
+            supplier_name=(o.order_snapshot or {}).get("supplier_name", ""),
+            certificate_type_name=(o.order_snapshot or {}).get("certificate_type_name", ""),
             created_at=o.created_at,
             updated_at=o.updated_at,
         )
@@ -129,7 +170,8 @@ async def get_stats(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    stats = await order_repository.get_stats(db, owner_user_id=current_user.id)
+    scope = _get_scope(current_user)
+    stats = await order_repository.get_stats(db, owner_user_id=current_user.id, scope=scope)
     return OrderStatsResponse(**stats)
 
 
@@ -139,7 +181,8 @@ async def get_order_detail(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    order = await order_service.get_order_for_user(db, task_order_id, current_user.id)
+    scope = _get_scope(current_user)
+    order = await order_service.get_order_for_user(db, task_order_id, current_user.id, scope=scope)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return OrderDetailResponse(
@@ -157,6 +200,10 @@ async def get_order_detail(
         detail_hash=order.detail_hash,
         order_snapshot=order.order_snapshot,
         raw_detail=order.raw_detail,
+        human_decision=order.human_decision,
+        correction_history=order.correction_history,
+        confirmed_by=order.confirmed_by,
+        confirmed_at=order.confirmed_at,
         created_at=order.created_at,
         updated_at=order.updated_at,
     )
@@ -179,13 +226,49 @@ async def retry_order(
     }
 
 
+@router.post("/{task_order_id}/correction", response_model=CorrectionResponse)
+async def correct_order(
+    task_order_id: str,
+    request: CorrectionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Apply a human correction to an AI audit decision."""
+    scope = _get_scope(current_user)
+    if request.reason is None or len(request.reason.strip()) == 0:
+        raise HTTPException(status_code=400, detail="reason is required")
+    # Default operator to current user's arms account
+    if not request.operator:
+        request.operator = current_user.arms_account
+    result = await correction_service.correct(
+        db, task_order_id, request, current_user.id, scope=scope,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return result
+
+
+@router.post("/batch-confirm", response_model=BatchConfirmResponse)
+async def batch_confirm_orders(
+    request: BatchConfirmRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Batch confirm orders (idempotent)."""
+    scope = _get_scope(current_user)
+    return await correction_service.batch_confirm(
+        db, request, current_user.id, scope=scope,
+    )
+
+
 @router.get("/{task_order_id}/result", response_model=OrderResultResponse)
 async def get_order_result(
     task_order_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    order = await order_service.get_order_for_user(db, task_order_id, current_user.id)
+    scope = _get_scope(current_user)
+    order = await order_service.get_order_for_user(db, task_order_id, current_user.id, scope=scope)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
 
@@ -195,8 +278,10 @@ async def get_order_result(
 
     result_stmt = (
         select(AuditResult)
-        .where(AuditResult.order_id == order.id)
-        .order_by(AuditResult.order_version.desc())
+        .where(
+            AuditResult.order_id == order.id,
+            AuditResult.order_version == order.order_version,
+        )
         .limit(1)
     )
     result_row = (await db.execute(result_stmt)).scalars().first()
@@ -207,6 +292,9 @@ async def get_order_result(
             task_order_id=order.task_order_id,
             pipeline_status=order.pipeline_status,
             decision=None,
+            human_decision=order.human_decision,
+            correction_history=order.correction_history,
+            confirmed_at=order.confirmed_at,
             summary=None,
             rules=[],
             model_provider=None,
@@ -242,6 +330,9 @@ async def get_order_result(
         task_order_id=order.task_order_id,
         pipeline_status=order.pipeline_status,
         decision=result_row.decision,
+        human_decision=order.human_decision,
+        correction_history=order.correction_history,
+        confirmed_at=order.confirmed_at,
         summary=normalized.get("summary", ""),
         rules=rules,
         model_provider=result_row.model_provider,

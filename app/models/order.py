@@ -6,6 +6,7 @@ from sqlalchemy import JSON, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.time import utc_now
 
 
 class Order(Base):
@@ -28,7 +29,12 @@ class Order(Base):
     detail_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     order_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     raw_detail: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+    # Human correction fields (P0: audit adjudication layer, decoupled from pipeline_status)
+    human_decision: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    correction_history: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True, default=list)
+    confirmed_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        default=utc_now, onupdate=utc_now, nullable=False
     )
