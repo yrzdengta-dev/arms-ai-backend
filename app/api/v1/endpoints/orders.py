@@ -365,3 +365,36 @@ async def get_order_result(
         order_version=result_row.order_version,
         updated_at=order.updated_at,
     )
+@router.post("/clear")
+async def clear_orders(
+    scope: str = Query("own", regex="^(own|all)$"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Clear all orders and related child-table data (DEV only).
+
+    - scope=own (default): delete only the current user's orders
+    - scope=all: delete all orders (requires admin or DEBUG)
+    - Production protection: returns 403 unless DEBUG=true or admin
+    """
+    settings = get_settings()
+    is_admin = can_view_all_orders(current_user, settings.admin_account_set)
+
+    if not settings.DEBUG and not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Clear endpoint is only available in DEBUG mode or for admin users",
+        )
+
+    if scope == "all" and not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="scope=all requires admin privileges",
+        )
+
+    repo_scope: Scope = "all" if scope == "all" else "own"
+    counts = await order_repository.bulk_delete_by_owner(
+        db, current_user.id, scope=repo_scope,
+    )
+    await db.commit()
+    return counts

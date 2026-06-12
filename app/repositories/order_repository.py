@@ -183,6 +183,77 @@ class OrderRepository:
         result = await db.execute(stmt)
         return result.scalar() or 0
 
+    async def bulk_delete_by_owner(
+        self, db: AsyncSession, owner_user_id: str, scope: str = "own"
+    ) -> dict[str, int]:
+        """Delete all orders and related child-table rows for a given scope.
+
+        Returns counts keyed by table name.
+        Child tables are deleted first (FK → parent).
+        Uses a single transaction; caller must commit/rollback.
+        """
+        from app.models.audit_result import AuditResult
+        from app.models.order_event import OrderEvent
+        from app.models.order_file import OrderFile
+        from app.models.processing_job import ProcessingJob
+        from app.models.task_outbox import TaskOutbox
+
+        # Build order_id list for the target scope
+        order_conditions = []
+        if scope == "own":
+            order_conditions.append(Order.owner_user_id == owner_user_id)
+
+        id_stmt = select(Order.id)
+        if order_conditions:
+            id_stmt = id_stmt.where(and_(*order_conditions))
+        id_result = await db.execute(id_stmt)
+        order_ids = [row[0] for row in id_result]
+
+        if not order_ids:
+            return {
+                "deleted_orders": 0,
+                "deleted_order_events": 0,
+                "deleted_audit_results": 0,
+                "deleted_order_files": 0,
+                "deleted_processing_jobs": 0,
+                "deleted_task_outbox": 0,
+            }
+
+        counts: dict[str, int] = {}
+
+        # Delete child tables first (FK → orders.id)
+        # 1. order_events
+        stmt = OrderEvent.__table__.delete().where(OrderEvent.order_id.in_(order_ids))
+        result = await db.execute(stmt)
+        counts["deleted_order_events"] = result.rowcount
+
+        # 2. audit_results
+        stmt = AuditResult.__table__.delete().where(AuditResult.order_id.in_(order_ids))
+        result = await db.execute(stmt)
+        counts["deleted_audit_results"] = result.rowcount
+
+        # 3. order_files
+        stmt = OrderFile.__table__.delete().where(OrderFile.order_id.in_(order_ids))
+        result = await db.execute(stmt)
+        counts["deleted_order_files"] = result.rowcount
+
+        # 4. processing_jobs
+        stmt = ProcessingJob.__table__.delete().where(ProcessingJob.order_id.in_(order_ids))
+        result = await db.execute(stmt)
+        counts["deleted_processing_jobs"] = result.rowcount
+
+        # 5. task_outbox
+        stmt = TaskOutbox.__table__.delete().where(TaskOutbox.order_id.in_(order_ids))
+        result = await db.execute(stmt)
+        counts["deleted_task_outbox"] = result.rowcount
+
+        # 6. orders (parent table, last)
+        stmt = Order.__table__.delete().where(Order.id.in_(order_ids))
+        result = await db.execute(stmt)
+        counts["deleted_orders"] = result.rowcount
+
+        return counts
+
     async def get_stats(
         self, db: AsyncSession, owner_user_id: str, scope: Scope = "own"
     ) -> dict[str, Any]:
