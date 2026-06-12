@@ -40,3 +40,8 @@ async def get_current_user_id(
 ) -> str:
     user = await get_current_user(x_arms_user=x_arms_user, db=db)
     return str(user.id)
+
+
+def can_view_all_orders(user: User, admin_account_set: list[str] | set[str]) -> bool:
+    """Check whether the given user is in the admin account set."""
+    return user.arms_account in admin_account_set

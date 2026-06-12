@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -97,6 +98,9 @@ async def list_orders(
     scene_id: str | None = Query(None),
     audit_point_id: str | None = Query(None),
     search: str | None = Query(None, max_length=128),
+    cert_type: str | None = Query(None),
+    created_after: datetime | None = Query(None),
+    created_before: datetime | None = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -113,6 +117,9 @@ async def list_orders(
         scene_id=scene_id,
         audit_point_id=audit_point_id,
         search=search,
+        cert_type=cert_type,
+        created_after=created_after,
+        created_before=created_before,
         scope=scope,
     )
     total = await order_repository.count_orders(
@@ -124,6 +131,9 @@ async def list_orders(
         scene_id=scene_id,
         audit_point_id=audit_point_id,
         search=search,
+        cert_type=cert_type,
+        created_after=created_after,
+        created_before=created_before,
         scope=scope,
     )
 

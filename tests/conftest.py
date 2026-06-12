@@ -35,11 +35,18 @@ async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest.fixture
-async def client(engine, db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+async def client(engine, db_session: AsyncSession, monkeypatch) -> AsyncGenerator[AsyncClient, None]:
+    from app.core.config import Settings
+
     async def override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+
+    # Override settings to include test admin accounts.
+    test_settings = Settings(admin_account_set=["SHEINsgs-5zs"])
+    monkeypatch.setattr("app.core.config.get_settings", lambda: test_settings)
+    monkeypatch.setattr("app.api.v1.endpoints.orders.get_settings", lambda: test_settings)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

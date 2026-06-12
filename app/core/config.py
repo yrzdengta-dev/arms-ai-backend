@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "ARMS AI Audit System"
     DEBUG: bool = False
 
+    # Admin
+    admin_account_set: list[str] = []
+
     # Processing
     MAX_AUDIT_ATTEMPTS: int = 3
     PDF_RETRY_MAX_ATTEMPTS: int = 3

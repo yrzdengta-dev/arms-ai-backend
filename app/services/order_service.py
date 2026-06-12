@@ -8,7 +8,7 @@ from app.core.state_machine import PipelineStatus
 from app.models.order import Order
 from app.models.user import User
 from app.repositories.event_repository import event_repository
-from app.repositories.order_repository import compute_detail_hash, order_repository
+from app.repositories.order_repository import Scope, compute_detail_hash, order_repository
 from app.schemas.order import OrderIngestRequest, PdfFileItem
 
 logger = logging.getLogger(__name__)
@@ -104,8 +104,10 @@ class OrderService:
         return existing, True
 
     async def get_order_for_user(
-        self, db: AsyncSession, task_order_id: str, owner_user_id: str
+        self, db: AsyncSession, task_order_id: str, owner_user_id: str, scope: Scope = "own",
     ) -> Order | None:
+        if scope == "all":
+            return await self.repo.get_by_task_order_id(db, task_order_id)
         return await self.repo.get_by_task_order_id_and_owner(
             db, task_order_id, owner_user_id
         )

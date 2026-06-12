@@ -1,12 +1,16 @@
 import hashlib
 import json
 from collections.abc import Sequence
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.order import Order
+
+
+Scope = Literal["all", "own"]
 
 
 def compute_detail_hash(order_snapshot: dict[str, Any], raw_detail: dict[str, Any]) -> str:
@@ -51,8 +55,14 @@ class OrderRepository:
         scene_id: str | None = None,
         audit_point_id: str | None = None,
         search: str | None = None,
+        scope: Scope = "own",
+        cert_type: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
     ) -> Sequence[Order]:
-        conditions = [Order.owner_user_id == owner_user_id]
+        conditions: list = []
+        if scope == "own":
+            conditions.append(Order.owner_user_id == owner_user_id)
 
         if pipeline_status:
             conditions.append(Order.pipeline_status == pipeline_status)
@@ -64,8 +74,23 @@ class OrderRepository:
             conditions.append(Order.audit_point_id == audit_point_id)
         if search:
             conditions.append(
-                Order.task_order_id.ilike(f"%{search}%")
+                or_(
+                    Order.task_order_id.ilike(f"%{search}%"),
+                    Order.order_snapshot["skc"].as_string().ilike(f"%{search}%"),
+                    Order.order_snapshot["product_name"].as_string().ilike(f"%{search}%"),
+                    Order.order_snapshot["supplier_name"].as_string().ilike(f"%{search}%"),
+                )
             )
+        if cert_type:
+            cert_values = [v.strip() for v in cert_type.split(",") if v.strip()]
+            if cert_values:
+                conditions.append(
+                    Order.order_snapshot["certificate_type_name"].as_string().in_(cert_values)
+                )
+        if created_after is not None:
+            conditions.append(Order.created_at >= created_after)
+        if created_before is not None:
+            conditions.append(Order.created_at <= created_before)
         if decision:
             from app.models.audit_result import AuditResult
 
@@ -96,8 +121,14 @@ class OrderRepository:
         scene_id: str | None = None,
         audit_point_id: str | None = None,
         search: str | None = None,
+        scope: Scope = "own",
+        cert_type: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
     ) -> int:
-        conditions = [Order.owner_user_id == owner_user_id]
+        conditions: list = []
+        if scope == "own":
+            conditions.append(Order.owner_user_id == owner_user_id)
 
         if pipeline_status:
             conditions.append(Order.pipeline_status == pipeline_status)
@@ -109,8 +140,23 @@ class OrderRepository:
             conditions.append(Order.audit_point_id == audit_point_id)
         if search:
             conditions.append(
-                Order.task_order_id.ilike(f"%{search}%")
+                or_(
+                    Order.task_order_id.ilike(f"%{search}%"),
+                    Order.order_snapshot["skc"].as_string().ilike(f"%{search}%"),
+                    Order.order_snapshot["product_name"].as_string().ilike(f"%{search}%"),
+                    Order.order_snapshot["supplier_name"].as_string().ilike(f"%{search}%"),
+                )
             )
+        if cert_type:
+            cert_values = [v.strip() for v in cert_type.split(",") if v.strip()]
+            if cert_values:
+                conditions.append(
+                    Order.order_snapshot["certificate_type_name"].as_string().in_(cert_values)
+                )
+        if created_after is not None:
+            conditions.append(Order.created_at >= created_after)
+        if created_before is not None:
+            conditions.append(Order.created_at <= created_before)
         if decision:
             from app.models.audit_result import AuditResult
 
@@ -126,19 +172,23 @@ class OrderRepository:
         return result.scalar() or 0
 
     async def get_stats(
-        self, db: AsyncSession, owner_user_id: str
+        self, db: AsyncSession, owner_user_id: str, scope: Scope = "own"
     ) -> dict[str, Any]:
-        total_stmt = select(func.count()).select_from(Order).where(
-            Order.owner_user_id == owner_user_id
-        )
+        base_conditions = []
+        if scope == "own":
+            base_conditions.append(Order.owner_user_id == owner_user_id)
+        total_stmt = select(func.count()).select_from(Order)
+        if base_conditions:
+            total_stmt = total_stmt.where(and_(*base_conditions))
         total_result = await db.execute(total_stmt)
         total = total_result.scalar() or 0
 
         pipeline_stmt = (
             select(Order.pipeline_status, func.count())
-            .where(Order.owner_user_id == owner_user_id)
-            .group_by(Order.pipeline_status)
         )
+        if base_conditions:
+            pipeline_stmt = pipeline_stmt.where(and_(*base_conditions))
+        pipeline_stmt = pipeline_stmt.group_by(Order.pipeline_status)
         pipeline_result = await db.execute(pipeline_stmt)
         by_pipeline = {row[0]: row[1] for row in pipeline_result}
 
@@ -148,9 +198,10 @@ class OrderRepository:
             select(AuditResult.decision, func.count())
             .select_from(Order)
             .join(AuditResult, Order.id == AuditResult.order_id, isouter=True)
-            .where(Order.owner_user_id == owner_user_id)
-            .group_by(AuditResult.decision)
         )
+        if base_conditions:
+            decision_stmt = decision_stmt.where(and_(*base_conditions))
+        decision_stmt = decision_stmt.group_by(AuditResult.decision)
         decision_result = await db.execute(decision_stmt)
         by_decision = {row[0] or "PENDING": row[1] for row in decision_result}
 
