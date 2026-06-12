@@ -10,6 +10,11 @@ from app.models.user import User
 logger = logging.getLogger(__name__)
 
 
+def can_view_all_orders(user: User, admin_accounts: set[str]) -> bool:
+    """Return True if user is a test admin with cross-user read scope."""
+    return user.arms_account in admin_accounts
+
+
 async def get_current_user(
     x_arms_user: str = Header(default="", alias="X-ARMS-User"),
     db: AsyncSession = Depends(get_db),

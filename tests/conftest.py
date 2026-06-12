@@ -3,7 +3,9 @@ from collections.abc import AsyncGenerator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
 from app.main import app
@@ -20,7 +22,11 @@ def event_loop():
 
 @pytest.fixture(scope="session")
 async def engine():
-    eng = create_async_engine(TEST_DATABASE_URL, echo=False)
+    eng = create_async_engine(
+        TEST_DATABASE_URL, echo=False,
+        poolclass=StaticPool,
+        connect_args={"check_same_thread": False},
+    )
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield eng
@@ -32,6 +38,41 @@ async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
         yield session
+
+
+@pytest.fixture(autouse=True)
+async def _isolate_test_data(engine):
+    """Ensure committed rows from one test cannot affect later tests."""
+    async with engine.begin() as connection:
+        for table in reversed(Base.metadata.sorted_tables):
+            await connection.execute(delete(table))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _patch_task_db(monkeypatch, engine):
+    """Route _get_session_factory through the test SQLite engine.
+
+    Tasks (like _run_pdf_task) create their own sessions via
+    _get_worker_session_factory(), which by default connects to PostgreSQL.
+    This fixture redirects all callers to the shared in-memory SQLite
+    database so tests can exercise task internals without Docker.
+    """
+    def _patched_factory():
+        return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    monkeypatch.setattr(
+        "app.core.database._get_session_factory",
+        _patched_factory,
+    )
+    monkeypatch.setattr(
+        "app.workers.tasks._get_session_factory",
+        _patched_factory,
+    )
+    monkeypatch.setattr(
+        "app.workers.tasks._get_worker_session_factory",
+        _patched_factory,
+    )
 
 
 @pytest.fixture

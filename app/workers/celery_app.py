@@ -8,6 +8,7 @@ celery_app = Celery(
     "arms_worker",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
+    include=["app.workers.tasks"],
 )
 
 celery_app.conf.update(
@@ -27,7 +28,7 @@ celery_app.conf.update(
     },
     task_routes={
         "app.workers.tasks.process_pdf": {"queue": "pdf"},
-        "app.workers.tasks.run_audit": {"queue": "audit_normal"},
+        "app.workers.tasks.run_audit_task": {"queue": "audit_normal"},
     },
     task_default_rate_limit=None,
     worker_prefetch_multiplier=1,

@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
@@ -17,7 +18,10 @@ async def lifespan(app: FastAPI):
     import asyncio
     import contextlib
 
+    from app.adapters.storage.minio import minio_storage
     from app.services.dispatcher import dispatch_outbox_loop
+
+    await minio_storage.ensure_bucket()
 
     dispatch_task = asyncio.create_task(dispatch_outbox_loop())
     yield
@@ -36,10 +40,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"(chrome-extension://[a-z]{32}|http://localhost(:\d+)?|https://arms\.biz\.sheincorp\.cn)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Last-Event-ID"],
 )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
@@ -55,7 +60,44 @@ async def ready():
     from app.core.database import is_db_healthy
 
     db_ok = await is_db_healthy()
-    return {
-        "status": "ready" if db_ok else "not_ready",
-        "database": "ok" if db_ok else "unavailable",
-    }
+    redis_ok = await _check_redis()
+    minio_ok = await _check_minio()
+
+    all_ok = db_ok and redis_ok and minio_ok
+    status_code = 200 if all_ok else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "ready" if all_ok else "not_ready",
+            "database": "ok" if db_ok else "unavailable",
+            "redis": "ok" if redis_ok else "unavailable",
+            "minio": "ok" if minio_ok else "unavailable",
+        },
+    )
+
+
+async def _check_redis() -> bool:
+    try:
+        import redis.asyncio as aioredis
+        r = aioredis.from_url(settings.REDIS_URL, socket_connect_timeout=2)
+        await r.ping()
+        await r.close()
+        return True
+    except Exception:
+        return False
+
+
+async def _check_minio() -> bool:
+    import asyncio as _asyncio
+    try:
+        from minio import Minio
+        client = Minio(
+            settings.MINIO_ENDPOINT,
+            access_key=settings.MINIO_ACCESS_KEY,
+            secret_key=settings.MINIO_SECRET_KEY,
+            secure=settings.MINIO_SECURE,
+        )
+        await _asyncio.to_thread(client.list_buckets)
+        return True
+    except Exception:
+        return False

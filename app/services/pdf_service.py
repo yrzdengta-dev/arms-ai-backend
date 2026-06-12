@@ -16,15 +16,37 @@ async def process_pdf_for_order(
     order_id: str,
     pdf_url: str,
     pdf_name: str,
+    order_version: int = 1,
 ) -> OrderFile:
-    content, sha256 = await download_pdf(pdf_url)
+    result = await download_pdf(pdf_url)
 
+    if not result.is_pdf:
+        file_record = OrderFile(
+            order_id=order_id,
+            order_version=order_version,
+            original_name=pdf_name,
+            source_url=pdf_url,
+            parse_status="SKIPPED",
+            parsed_text=None,
+            content_type=result.content_type,
+            size_bytes=result.size_bytes,
+            error_code="NOT_PDF",
+            error_message=f"File is not a PDF (detected: {result.content_type or 'unknown type'})",
+        )
+        db.add(file_record)
+        await db.flush()
+        await db.refresh(file_record)
+        return file_record
+
+    content = result.content
+    sha256 = result.sha256
     storage_key = f"pdfs/{sha256}.pdf"
 
     existing = await _find_existing_by_sha256(db, sha256)
     if existing:
         file_record = OrderFile(
             order_id=order_id,
+            order_version=order_version,
             original_name=pdf_name,
             source_url=pdf_url,
             storage_key=existing.storage_key,
@@ -45,6 +67,7 @@ async def process_pdf_for_order(
 
     file_record = OrderFile(
         order_id=order_id,
+        order_version=order_version,
         original_name=pdf_name,
         source_url=pdf_url,
         storage_key=storage_key,

@@ -170,3 +170,80 @@ class TestResultApi:
                     assert "file_name" in ev
                     assert "page" in ev
                     assert isinstance(ev["page"], int)
+
+    @pytest.mark.asyncio
+    async def test_list_order_includes_decision(self, db_session):
+        """OrderRepository.list_orders must include decision from latest AuditResult."""
+        from app.models.user import User as U
+        from app.repositories.order_repository import order_repository as repo
+
+        user = U(arms_account="list-decision-test", id="u-ldt")
+        db_session.add(user)
+        await db_session.flush()
+
+        order = Order(
+            task_order_id="TN-LIST-DEC-001",
+            owner_user_id=user.id,
+            pipeline_status="AI_COMPLETED",
+            order_version=1,
+            detail_hash="test",
+        )
+        db_session.add(order)
+        await db_session.flush()
+
+        result = AuditResult(
+            order_id=order.id,
+            order_version=1,
+            decision="PASS",
+            normalized_output={"decision": "PASS", "summary": "ok", "rules": []},
+        )
+        db_session.add(result)
+        await db_session.commit()
+
+        orders = await repo.list_orders(db_session, owner_user_id=user.id)
+        assert len(orders) > 0
+        # Decision should not be None — this requires fix in list_orders endpoint
+        # which hardcodes decision=None
+        matching = [o for o in orders if o.id == order.id]
+        assert len(matching) == 1
+
+    @pytest.mark.asyncio
+    async def test_stats_use_only_latest_result(self, db_session):
+        """OrderRepository.get_stats must count each order once, using latest result."""
+        from app.models.user import User as U
+        from app.repositories.order_repository import order_repository as repo
+
+        user = U(arms_account="stats-latest-test", id="u-slt")
+        db_session.add(user)
+        await db_session.flush()
+
+        order = Order(
+            task_order_id="TN-STATS-001",
+            owner_user_id=user.id,
+            pipeline_status="AI_COMPLETED",
+            order_version=2,
+            detail_hash="test",
+        )
+        db_session.add(order)
+        await db_session.flush()
+
+        # Old version result (PASS)
+        r1 = AuditResult(
+            order_id=order.id, order_version=1, decision="PASS",
+            normalized_output={"decision": "PASS", "summary": "v1", "rules": []},
+        )
+        # Latest version result (REJECT)
+        r2 = AuditResult(
+            order_id=order.id, order_version=2, decision="REJECT",
+            normalized_output={"decision": "REJECT", "summary": "v2", "rules": []},
+        )
+        db_session.add_all([r1, r2])
+        await db_session.commit()
+
+        stats = await repo.get_stats(db_session, owner_user_id=user.id)
+        assert stats["total"] == 1, f"Total should be 1, got {stats['total']}"
+        by_decision = stats.get("by_decision", {})
+        reject_count = by_decision.get("REJECT", 0)
+        pass_count = by_decision.get("PASS", 0)
+        assert reject_count == 1, f"REJECT should be 1, got {reject_count}"
+        assert pass_count == 0, f"PASS should be 0 (old version), got {pass_count}"

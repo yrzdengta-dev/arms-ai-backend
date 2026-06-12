@@ -5,6 +5,7 @@ from sqlalchemy import BigInteger, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.time import utc_now
 
 
 class OrderFile(Base):
@@ -16,8 +17,10 @@ class OrderFile(Base):
     order_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    order_version: Mapped[int] = mapped_column(default=1, nullable=False)
     original_name: Mapped[str] = mapped_column(String(512), nullable=False)
     source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    internal_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     storage_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -26,7 +29,7 @@ class OrderFile(Base):
     parsed_text: Mapped[str | None] = mapped_column(String, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        default=utc_now, onupdate=utc_now, nullable=False
     )

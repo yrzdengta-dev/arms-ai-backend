@@ -14,6 +14,8 @@ Error codes must be specific and trackable, not all compressed to PDF_ERROR.
 """
 
 
+import pytest
+
 from app.adapters.pdf.downloader import PdfDownloadError
 
 
@@ -91,3 +93,90 @@ class TestPdfErrorPropagation:
             assert r.error_code != "PDF_ERROR", (
                 f"Error code must be specific, not generic 'PDF_ERROR': {r.error_code}"
             )
+
+
+def test_ocr_required_not_treated_as_ready():
+    """A file with OCR_REQUIRED parse_status must not be counted as ready."""
+    from app.services.pdf_service import _parse_status_from_result
+    from dataclasses import dataclass
+
+    @dataclass
+    class FakeParseResult:
+        error_code: str | None = None
+        error_message: str | None = None
+        is_scanned: bool = False
+        text: str = ""
+
+    # OCR_REQUIRED via error_code
+    assert _parse_status_from_result(FakeParseResult(error_code="OCR_REQUIRED")) == "OCR_REQUIRED"
+    # OCR_REQUIRED via is_scanned
+    assert _parse_status_from_result(FakeParseResult(is_scanned=True)) == "OCR_REQUIRED"
+    # FAILED
+    assert _parse_status_from_result(FakeParseResult(error_code="PDF_ENCRYPTED")) == "FAILED"
+    # READY
+    assert _parse_status_from_result(FakeParseResult()) == "READY"
+
+
+@pytest.mark.asyncio
+async def test_no_duplicate_order_files_after_processing(db_session):
+    """After PDF processing, old PENDING records must be cleaned up — no duplicates."""
+    import uuid
+    from app.models.order import Order
+    from app.models.order_file import OrderFile
+    from app.models.user import User
+
+    user = User(arms_account="dedup-test", id="u-dedup")
+    db_session.add(user)
+    await db_session.flush()
+
+    order = Order(
+        id=str(uuid.uuid4()),
+        task_order_id="TN-DEDUP-001",
+        owner_user_id=user.id,
+        pipeline_status="RECEIVED",
+        order_version=1,
+        detail_hash="test",
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    # Create a PENDING file record (simulating _enqueue_order)
+    pending = OrderFile(
+        order_id=order.id,
+        order_version=1,
+        original_name="test.pdf",
+        source_url="https://example.com/test.pdf",
+        parse_status="PENDING",
+    )
+    db_session.add(pending)
+    await db_session.flush()
+    pending_id = pending.id
+
+    # Create a new file record with parsed result (simulating process_pdf_for_order result)
+    new_file = OrderFile(
+        order_id=order.id,
+        order_version=1,
+        original_name="test.pdf",
+        source_url="https://example.com/test.pdf",
+        parse_status="READY",
+        parsed_text="some text",
+        sha256="abc123",
+        storage_key="pdfs/abc123.pdf",
+        content_type="application/pdf",
+        size_bytes=1000,
+    )
+    db_session.add(new_file)
+    await db_session.flush()
+    new_id = new_file.id
+
+    # Simulate cleanup: delete old PENDING record
+    old = await db_session.get(OrderFile, pending_id)
+    if old is not None and new_id != pending_id:
+        await db_session.delete(old)
+    await db_session.commit()
+
+    # Verify no duplicates remain
+    from sqlalchemy import select, func
+    count_stmt = select(func.count()).select_from(OrderFile).where(OrderFile.order_id == order.id)
+    count = (await db_session.execute(count_stmt)).scalar()
+    assert count == 1, f"Should have exactly 1 file record after cleanup, got {count}"

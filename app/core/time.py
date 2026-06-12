@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def utc_now() -> datetime:
-    """Return the current UTC datetime (timezone-aware)."""
-    return datetime.now(timezone.utc)
+    """Return a naive UTC timestamp for the existing database columns."""
+    return datetime.now(UTC).replace(tzinfo=None)

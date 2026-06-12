@@ -35,7 +35,11 @@ class OrderService:
         request: OrderIngestRequest,
         owner: User,
     ) -> tuple[Order, bool]:
-        new_hash = compute_detail_hash(request.order_snapshot, request.raw_detail)
+        new_hash = compute_detail_hash(
+            request.order_snapshot,
+            request.raw_detail,
+            request.pdf_files,
+        )
         existing = await self.repo.get_by_task_order_id(db, request.task_order_id)
 
         if existing is not None and existing.owner_user_id != owner.id:
@@ -97,6 +101,11 @@ class OrderService:
 
         existing.order_version += 1
         existing.detail_hash = new_hash
+        existing.task_uuid = request.task_uuid
+        existing.scene_id = request.scene_id
+        existing.audit_point_id = request.audit_point_id
+        existing.audit_node = request.audit_node
+        existing.business_type = request.business_type
         existing.order_snapshot = request.order_snapshot
         existing.raw_detail = request.raw_detail
         existing.pipeline_status = PipelineStatus.RECEIVED.value
@@ -117,7 +126,8 @@ class OrderService:
         return existing, True
 
     async def get_order_for_user(
-        self, db: AsyncSession, task_order_id: str, owner_user_id: str, scope: Scope = "own",
+        self, db: AsyncSession, task_order_id: str, owner_user_id: str,
+        scope: Scope = "own",
     ) -> Order | None:
         if scope == "all":
             return await self.repo.get_by_task_order_id(db, task_order_id)
@@ -137,7 +147,7 @@ class OrderService:
         from app.core.state_machine import PipelineStatus, can_transition
 
         current = PipelineStatus(order.pipeline_status)
-        if not can_transition(current, PipelineStatus.PDF_QUEUED):
+        if not can_transition(current, PipelineStatus.RECEIVED):
             logger.warning(
                 "Retry not allowed task_order_id=%s status=%s",
                 task_order_id, order.pipeline_status,
@@ -205,15 +215,19 @@ async def _enqueue_order(
             if isinstance(pf, dict):
                 file_record = OrderFile(
                     order_id=order.id,
+                    order_version=order.order_version,
                     original_name=pf.get("name", pf.get("original_name", "document.pdf")),
                     source_url=pf.get("url", pf.get("source_url", "")),
+                    internal_url=pf.get("internal_url", ""),
                     parse_status="PENDING",
                 )
             else:
                 file_record = OrderFile(
                     order_id=order.id,
+                    order_version=order.order_version,
                     original_name=getattr(pf, "name", "document.pdf"),
                     source_url=getattr(pf, "url", ""),
+                    internal_url=getattr(pf, "internal_url", ""),
                     parse_status="PENDING",
                 )
             db.add(file_record)
