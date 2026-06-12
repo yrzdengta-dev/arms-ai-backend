@@ -1,4 +1,5 @@
 import logging
+from asyncio import to_thread
 
 from minio import Minio
 from minio.error import S3Error
@@ -21,9 +22,9 @@ class MinioStorage:
 
     async def ensure_bucket(self) -> None:
         try:
-            exists = self.client.bucket_exists(self.bucket)
+            exists = await to_thread(self.client.bucket_exists, self.bucket)
             if not exists:
-                self.client.make_bucket(self.bucket)
+                await to_thread(self.client.make_bucket, self.bucket)
                 logger.info("Created bucket %s", self.bucket)
         except S3Error as e:
             logger.error("MinIO bucket check failed: %s", e)
@@ -31,7 +32,7 @@ class MinioStorage:
 
     async def object_exists(self, storage_key: str) -> bool:
         try:
-            self.client.stat_object(self.bucket, storage_key)
+            await to_thread(self.client.stat_object, self.bucket, storage_key)
             return True
         except S3Error:
             return False
@@ -41,7 +42,8 @@ class MinioStorage:
     ) -> None:
         from io import BytesIO
 
-        self.client.put_object(
+        await to_thread(
+            self.client.put_object,
             bucket_name=self.bucket,
             object_name=storage_key,
             data=BytesIO(content),
@@ -53,7 +55,12 @@ class MinioStorage:
     async def get_presigned_url(self, storage_key: str, expires: int = 3600) -> str | None:
         try:
             from datetime import timedelta
-            return self.client.presigned_get_object(self.bucket, storage_key, expires=timedelta(seconds=expires))
+            return await to_thread(
+                self.client.presigned_get_object,
+                self.bucket,
+                storage_key,
+                expires=timedelta(seconds=expires),
+            )
         except S3Error:
             return None
 

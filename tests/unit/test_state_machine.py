@@ -8,6 +8,7 @@ def test_valid_forward_transitions():
     assert can_transition(PipelineStatus.PDF_QUEUED, PipelineStatus.PDF_DOWNLOADING)
     assert can_transition(PipelineStatus.PDF_DOWNLOADING, PipelineStatus.PDF_READY)
     assert can_transition(PipelineStatus.PDF_DOWNLOADING, PipelineStatus.PDF_FAILED)
+    assert can_transition(PipelineStatus.PDF_DOWNLOADING, PipelineStatus.MANUAL_REQUIRED)
     assert can_transition(PipelineStatus.PDF_READY, PipelineStatus.ROUTING)
     assert can_transition(PipelineStatus.ROUTING, PipelineStatus.AI_QUEUED)
     assert can_transition(PipelineStatus.ROUTING, PipelineStatus.MANUAL_REQUIRED)
@@ -37,3 +38,24 @@ def test_validate_transition_returns_false_for_invalid():
     assert not validate_transition(
         PipelineStatus.AI_COMPLETED, PipelineStatus.RECEIVED, "test-order-id"
     )
+
+
+def test_retry_transition_from_failed_retryable():
+    """Retry must be allowed from FAILED_RETRYABLE back to RECEIVED."""
+    assert can_transition(PipelineStatus.FAILED_RETRYABLE, PipelineStatus.RECEIVED), (
+        "FAILED_RETRYABLE must be able to transition to RECEIVED for retry"
+    )
+
+
+def test_retry_transition_from_pdf_failed():
+    """Retry must be allowed from PDF_FAILED back to RECEIVED."""
+    assert can_transition(PipelineStatus.PDF_FAILED, PipelineStatus.RECEIVED), (
+        "PDF_FAILED must be able to transition to RECEIVED for retry"
+    )
+
+
+def test_retry_not_allowed_from_terminal():
+    """Retry must NOT be allowed from terminal states."""
+    assert not can_transition(PipelineStatus.AI_COMPLETED, PipelineStatus.RECEIVED)
+    assert not can_transition(PipelineStatus.FAILED_FINAL, PipelineStatus.RECEIVED)
+    assert not can_transition(PipelineStatus.MANUAL_REQUIRED, PipelineStatus.RECEIVED)

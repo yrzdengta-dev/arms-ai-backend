@@ -130,3 +130,44 @@ def test_multiple_candidates_no_unique_match():
         assert result.get("ambiguous") or result.get("result") == "MANUAL_REVIEW", (
             f"Multiple candidates must trigger MANUAL_REVIEW or ambiguity flag: {result}"
         )
+
+
+# --- Test deterministic rules override AI decision ---
+
+def test_deterministic_manual_review_overrides_ai_pass():
+    """When deterministic rules return MANUAL_REVIEW, final decision must not be PASS."""
+    from app.services.audit_service import _compute_final_decision
+    # AI returns PASS but deterministic rules say MANUAL_REVIEW
+    decision = _compute_final_decision("PASS", [
+        {"rule_id": "R1", "result": "PASS", "reason": "ok"},
+        {"rule_id": "CHECK_REQUIRED", "result": "MANUAL_REVIEW", "reason": "missing field"},
+    ])
+    assert decision == "MANUAL_REVIEW", f"Expected MANUAL_REVIEW, got {decision}"
+
+
+def test_deterministic_reject_overrides_ai_pass():
+    """When deterministic rules return REJECT, final decision must be REJECT."""
+    from app.services.audit_service import _compute_final_decision
+    decision = _compute_final_decision("PASS", [
+        {"rule_id": "R1", "result": "REJECT", "reason": "mismatch"},
+        {"rule_id": "R2", "result": "PASS", "reason": "ok"},
+    ])
+    assert decision == "REJECT", f"Expected REJECT, got {decision}"
+
+
+def test_deterministic_reject_overrides_manual_review():
+    """REJECT from deterministic rules beats MANUAL_REVIEW from AI."""
+    from app.services.audit_service import _compute_final_decision
+    decision = _compute_final_decision("MANUAL_REVIEW", [
+        {"rule_id": "R1", "result": "REJECT", "reason": "hard mismatch"},
+    ])
+    assert decision == "REJECT", f"Expected REJECT, got {decision}"
+
+
+def test_ai_pass_used_when_no_deterministic_issues():
+    """When deterministic rules all pass, AI decision is used."""
+    from app.services.audit_service import _compute_final_decision
+    decision = _compute_final_decision("PASS", [
+        {"rule_id": "R1", "result": "PASS", "reason": "ok"},
+    ])
+    assert decision == "PASS", f"Expected PASS, got {decision}"

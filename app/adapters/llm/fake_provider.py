@@ -33,7 +33,7 @@ class AuditModelProvider(Protocol):
 
 
 class FakeAuditProvider:
-    async def audit(self, request: AuditModelRequest) -> AuditModelResponse:
+    def _build_response(self, request: AuditModelRequest) -> AuditModelResponse:
         input_payload = json.dumps(
             {"prompt": request.prompt, "pdf_text_len": len(request.pdf_text)},
             sort_keys=True,
@@ -88,3 +88,9 @@ class FakeAuditProvider:
             model_name="fake-v1",
             input_hash=input_hash,
         )
+
+    async def audit(self, request: AuditModelRequest) -> AuditModelResponse:
+        return self._build_response(request)
+
+    def audit_sync(self, request: AuditModelRequest) -> AuditModelResponse:
+        return self._build_response(request)

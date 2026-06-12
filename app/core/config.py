@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     MAX_AUDIT_ATTEMPTS: int = 3
     PDF_RETRY_MAX_ATTEMPTS: int = 3
     PDF_RETRY_BACKOFF_BASE: float = 2.0
+    OUTBOX_RECONCILE_INTERVAL_SECONDS: int = 30
+    OUTBOX_STALE_AFTER_SECONDS: int = 120
+
+    # Admin
+    ARMS_ADMIN_ACCOUNTS: str = ""
+
+    @property
+    def admin_account_set(self) -> set[str]:
+        return {a.strip() for a in self.ARMS_ADMIN_ACCOUNTS.split(",") if a.strip()}
 
 
 @lru_cache

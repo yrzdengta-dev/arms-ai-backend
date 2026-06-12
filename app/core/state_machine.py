@@ -4,7 +4,7 @@ Pipeline status state machine.
 Valid transitions (forward-only):
   RECEIVED -> PDF_QUEUED
   PDF_QUEUED -> PDF_DOWNLOADING
-  PDF_DOWNLOADING -> PDF_READY | PDF_FAILED
+  PDF_DOWNLOADING -> PDF_READY | PDF_FAILED | MANUAL_REQUIRED
   PDF_READY -> ROUTING
   ROUTING -> AI_QUEUED | MANUAL_REQUIRED
   AI_QUEUED -> AI_RUNNING
@@ -39,14 +39,27 @@ class PipelineStatus(StrEnum):
 
 VALID_TRANSITIONS: dict[PipelineStatus, set[PipelineStatus]] = {
     PipelineStatus.RECEIVED: {PipelineStatus.PDF_QUEUED},
-    PipelineStatus.PDF_QUEUED: {PipelineStatus.PDF_DOWNLOADING},
-    PipelineStatus.PDF_DOWNLOADING: {PipelineStatus.PDF_READY, PipelineStatus.PDF_FAILED},
-    PipelineStatus.PDF_READY: {PipelineStatus.ROUTING},
-    PipelineStatus.ROUTING: {PipelineStatus.AI_QUEUED, PipelineStatus.MANUAL_REQUIRED},
-    PipelineStatus.AI_QUEUED: {PipelineStatus.AI_RUNNING},
-    PipelineStatus.AI_RUNNING: {PipelineStatus.AI_COMPLETED, PipelineStatus.MANUAL_REQUIRED},
-    PipelineStatus.PDF_FAILED: {PipelineStatus.FAILED_RETRYABLE, PipelineStatus.FAILED_FINAL},
-    PipelineStatus.FAILED_RETRYABLE: {PipelineStatus.PDF_QUEUED},
+    PipelineStatus.PDF_QUEUED: {PipelineStatus.PDF_DOWNLOADING, PipelineStatus.FAILED_FINAL},
+    PipelineStatus.PDF_DOWNLOADING: {
+        PipelineStatus.PDF_READY,
+        PipelineStatus.PDF_FAILED,
+        PipelineStatus.FAILED_FINAL,
+        PipelineStatus.MANUAL_REQUIRED,
+    },
+    PipelineStatus.PDF_READY: {PipelineStatus.ROUTING, PipelineStatus.FAILED_FINAL},
+    PipelineStatus.ROUTING: {
+        PipelineStatus.AI_QUEUED,
+        PipelineStatus.MANUAL_REQUIRED,
+        PipelineStatus.FAILED_FINAL,
+    },
+    PipelineStatus.AI_QUEUED: {PipelineStatus.AI_RUNNING, PipelineStatus.FAILED_FINAL},
+    PipelineStatus.AI_RUNNING: {
+        PipelineStatus.AI_COMPLETED,
+        PipelineStatus.MANUAL_REQUIRED,
+        PipelineStatus.FAILED_FINAL,
+    },
+    PipelineStatus.PDF_FAILED: {PipelineStatus.FAILED_RETRYABLE, PipelineStatus.FAILED_FINAL, PipelineStatus.RECEIVED},
+    PipelineStatus.FAILED_RETRYABLE: {PipelineStatus.PDF_QUEUED, PipelineStatus.RECEIVED},
     PipelineStatus.AI_COMPLETED: set(),
     PipelineStatus.MANUAL_REQUIRED: set(),
     PipelineStatus.FAILED_FINAL: set(),

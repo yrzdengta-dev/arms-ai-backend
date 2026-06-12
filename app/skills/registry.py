@@ -29,12 +29,21 @@ class SkillMatch:
 
 
 def load_manifests() -> list[dict[str, Any]]:
-    manifests = []
+    manifests: list[dict[str, Any]] = []
     for path in MANIFESTS_DIR.glob("*.yaml"):
-        with open(path) as f:
-            data = yaml.safe_load(f)
+        try:
+            with open(path) as f:
+                data = yaml.safe_load(f)
+            if not isinstance(data, dict):
+                logger.error("Ignoring invalid skill manifest %s: root must be an object", path.name)
+                continue
+            if not data.get("skill_id") or not data.get("prompt_file"):
+                logger.error("Ignoring invalid skill manifest %s: missing skill_id or prompt_file", path.name)
+                continue
             if data.get("enabled", True):
                 manifests.append(data)
+        except (OSError, yaml.YAMLError):
+            logger.exception("Ignoring unreadable skill manifest %s", path.name)
     return manifests
 
 
@@ -52,7 +61,7 @@ def load_prompt(filename: str) -> tuple[str, str]:
 
 def match_skill(order: dict[str, Any]) -> SkillMatch | None:
     manifests = load_manifests()
-    matches: list[tuple[dict[str, Any], int]] = []
+    matches: list[tuple[dict[str, Any], int, int]] = []
 
     scene_id = str(order.get("scene_id", ""))
     audit_point_id = str(order.get("audit_point_id", ""))
@@ -67,21 +76,24 @@ def match_skill(order: dict[str, Any]) -> SkillMatch | None:
             industry_ids, category_ids, business_type,
         )
         if score > 0:
-            matches.append((mf, score))
+            matches.append((mf, score, int(mf.get("priority", 0))))
 
     if not matches:
         logger.info("No skill matched — manual required")
         return None
 
-    matches.sort(key=lambda x: x[1], reverse=True)
+    matches.sort(key=lambda x: (x[1], x[2]), reverse=True)
     best_score = matches[0][1]
+    best_priority = matches[0][2]
 
-    tied = [m for m in matches if m[1] == best_score]
+    tied = [m for m in matches if m[1] == best_score and m[2] == best_priority]
     if len(tied) > 1:
         names = [t[0]["skill_id"] for t in tied]
         logger.warning(
-            "Multiple skills tied at priority=%s: %s — manual required",
-            best_score, names,
+            "Multiple skills tied at specificity=%s priority=%s: %s — manual required",
+            best_score,
+            best_priority,
+            names,
         )
         return None
 
@@ -106,7 +118,6 @@ def _score_match(
     category_ids: list[str],
     business_type: str,
 ) -> int:
-    score = 0
     match = mf.get("match", {})
 
     mf_scene = [str(s) for s in match.get("scene_ids", [])]
@@ -114,21 +125,39 @@ def _score_match(
     mf_ct = [str(c) for c in match.get("certificate_type_ids", [])]
     mf_ind = [str(i) for i in match.get("industry_ids", [])]
     mf_cat = [str(c) for c in match.get("category_ids", [])]
+    mf_bt = match.get("business_type")
 
-    if mf_scene and scene_id in mf_scene:
+    # All specified criteria must match (AND logic). Partial matches get 0.
+    if mf_scene and scene_id not in mf_scene:
+        return 0
+    if mf_ap and audit_point_id not in mf_ap:
+        return 0
+    if mf_ct and certificate_type_id not in mf_ct:
+        return 0
+    if mf_ind and not any(i in mf_ind for i in industry_ids):
+        return 0
+    if mf_cat and not any(c in mf_cat for c in category_ids):
+        return 0
+    if mf_bt and business_type != mf_bt:
+        return 0
+
+    # All criteria matched — compute score based on how many matched
+    score = 0
+    if mf_scene:
         score += 10
-    if mf_ap and audit_point_id in mf_ap:
+    if mf_ap:
         score += 10
-    if mf_ct and certificate_type_id in mf_ct:
+    if mf_ct:
         score += 10
-    if mf_ind and any(i in mf_ind for i in industry_ids):
+    if mf_ind:
         score += 5
-    if mf_cat and any(c in mf_cat for c in category_ids):
+    if mf_cat:
         score += 5
-    if business_type and match.get("business_type") == business_type:
+    if mf_bt:
         score += 15
 
-    if score == 0 and not mf_scene and not mf_ap and not mf_ct and not mf_ind and not mf_cat:
-        score = mf.get("priority", 100)
+    # Empty criteria must not become an implicit global catch-all.
+    if score == 0 and not mf_scene and not mf_ap and not mf_ct and not mf_ind and not mf_cat and not mf_bt:
+        return 0
 
     return score

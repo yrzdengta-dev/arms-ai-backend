@@ -87,7 +87,7 @@ class TestMultiPdf:
         db_session.add_all([f1, f2])
         await db_session.commit()
 
-        text = await _get_parsed_text(db_session, order.id)
+        text = await _get_parsed_text(db_session, order.id, order.order_version)
         assert "Content from file A" in text, f"Missing text from a.pdf, got: {text[:200]}"
         assert "Content from file B" in text, f"Missing text from b.pdf, got: {text[:200]}"
 

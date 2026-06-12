@@ -5,6 +5,7 @@ from sqlalchemy import JSON, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.time import utc_now
 
 
 class OrderEvent(Base):
@@ -23,5 +24,5 @@ class OrderEvent(Base):
     order_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        default=datetime.utcnow, nullable=False, index=True
+        default=utc_now, nullable=False, index=True
     )

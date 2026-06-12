@@ -1,17 +1,106 @@
 import hashlib
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, exists, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.selectable import Subquery
 
+from app.models.audit_result import AuditResult
 from app.models.order import Order
 
+Scope = Literal["own", "all"]
+_VOLATILE_HASH_KEYS = {"collected_at", "collection_run_id"}
+_URL_HASH_KEYS = {"url", "source_url", "internal_url"}
 
-def compute_detail_hash(order_snapshot: dict[str, Any], raw_detail: dict[str, Any]) -> str:
-    payload = json.dumps({"snapshot": order_snapshot, "detail": raw_detail}, sort_keys=True)
+_SIGNATURE_QUERY_PARAMS: set[str] = {
+    # AWS S3 / CloudFront pre-signed URL
+    "x-amz-algorithm", "x-amz-credential", "x-amz-date",
+    "x-amz-expires", "x-amz-signedheaders", "x-amz-signature",
+    "x-amz-security-token", "awsaccesskeyid",
+    # Google Cloud Storage signed URL
+    "expires", "signature", "googleaccessid",
+    # Azure Blob SAS token (signature params only)
+    "sig", "se", "sp", "spr", "st", "sv", "sip", "ske", "skoid", "sktid", "skv",
+    # Generic / CDN / auth tokens
+    "token",
+    "response-content-disposition", "response-content-type",
+    "response-cache-control", "response-expires",
+}
+
+
+def compute_detail_hash(
+    order_snapshot: dict[str, Any],
+    raw_detail: dict[str, Any],
+    pdf_files: Sequence[Any] | None = None,
+) -> str:
+    payload = json.dumps(
+        {
+            "snapshot": _canonicalize_for_hash(order_snapshot),
+            "detail": _canonicalize_for_hash(raw_detail),
+            "pdf_files": _canonicalize_for_hash([
+                item.model_dump() if hasattr(item, "model_dump") else item
+                for item in (pdf_files or [])
+            ]),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _canonicalize_for_hash(value: Any, key: str = "") -> Any:
+    if isinstance(value, dict):
+        return {
+            item_key: _canonicalize_for_hash(item_value, item_key)
+            for item_key, item_value in value.items()
+            if item_key not in _VOLATILE_HASH_KEYS
+        }
+    if isinstance(value, list):
+        return [_canonicalize_for_hash(item, key) for item in value]
+    if isinstance(value, str) and (key in _URL_HASH_KEYS or key.endswith("_url")):
+        parsed = urlsplit(value)
+        if parsed.scheme in {"http", "https"}:
+            filtered_query = _filter_signature_query(parsed.query)
+            return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, filtered_query, ""))
+    return value
+
+
+def _filter_signature_query(query: str) -> str:
+    """Remove signature/time-limited params, keep the rest (sorted)."""
+    if not query:
+        return ""
+    from urllib.parse import parse_qsl, urlencode
+    params = parse_qsl(query, keep_blank_values=False)
+    kept = [(k, v) for k, v in params if k.lower() not in _SIGNATURE_QUERY_PARAMS]
+    kept.sort(key=lambda x: x[0])
+    return urlencode(kept) if kept else ""
+
+
+def _current_result_subq() -> Subquery:
+    """Return audit results keyed by both order id and order version."""
+    return select(
+        AuditResult.order_id,
+        AuditResult.order_version,
+        AuditResult.decision,
+    ).subquery()
+
+
+def _latest_result_subq() -> Subquery:
+    """Backward-compatible alias for callers using the former helper name."""
+    return _current_result_subq()
+
+
+def _current_decision_exists(decision: str):
+    return exists(
+        select(AuditResult.id).where(
+            AuditResult.order_id == Order.id,
+            AuditResult.order_version == Order.order_version,
+            AuditResult.decision == decision,
+        )
+    )
 
 
 class OrderRepository:
@@ -51,8 +140,11 @@ class OrderRepository:
         scene_id: str | None = None,
         audit_point_id: str | None = None,
         search: str | None = None,
+        scope: Scope = "own",
     ) -> Sequence[Order]:
-        conditions = [Order.owner_user_id == owner_user_id]
+        conditions = []
+        if scope == "own":
+            conditions.append(Order.owner_user_id == owner_user_id)
 
         if pipeline_status:
             conditions.append(Order.pipeline_status == pipeline_status)
@@ -67,18 +159,11 @@ class OrderRepository:
                 Order.task_order_id.ilike(f"%{search}%")
             )
         if decision:
-            from app.models.audit_result import AuditResult
-
-            subq = (
-                select(AuditResult.order_id)
-                .where(AuditResult.decision == decision)
-                .subquery()
-            )
-            conditions.append(Order.id.in_(select(subq.c.order_id)))
+            conditions.append(_current_decision_exists(decision))
 
         stmt = (
             select(Order)
-            .where(and_(*conditions))
+            .where(and_(*conditions) if conditions else true())
             .order_by(Order.created_at.desc())
             .offset(skip)
             .limit(limit)
@@ -96,8 +181,11 @@ class OrderRepository:
         scene_id: str | None = None,
         audit_point_id: str | None = None,
         search: str | None = None,
+        scope: Scope = "own",
     ) -> int:
-        conditions = [Order.owner_user_id == owner_user_id]
+        conditions = []
+        if scope == "own":
+            conditions.append(Order.owner_user_id == owner_user_id)
 
         if pipeline_status:
             conditions.append(Order.pipeline_status == pipeline_status)
@@ -112,45 +200,46 @@ class OrderRepository:
                 Order.task_order_id.ilike(f"%{search}%")
             )
         if decision:
-            from app.models.audit_result import AuditResult
+            conditions.append(_current_decision_exists(decision))
 
-            subq = (
-                select(AuditResult.order_id)
-                .where(AuditResult.decision == decision)
-                .subquery()
-            )
-            conditions.append(Order.id.in_(select(subq.c.order_id)))
-
-        stmt = select(func.count()).select_from(Order).where(and_(*conditions))
+        stmt = select(func.count()).select_from(Order).where(and_(*conditions) if conditions else true())
         result = await db.execute(stmt)
         return result.scalar() or 0
 
     async def get_stats(
-        self, db: AsyncSession, owner_user_id: str
+        self, db: AsyncSession, owner_user_id: str, scope: Scope = "own",
     ) -> dict[str, Any]:
-        total_stmt = select(func.count()).select_from(Order).where(
-            Order.owner_user_id == owner_user_id
-        )
+        conditions = []
+        if scope == "own":
+            conditions.append(Order.owner_user_id == owner_user_id)
+
+        total_stmt = select(func.count()).select_from(Order)
+        total_stmt = total_stmt.where(and_(*conditions) if conditions else true())
         total_result = await db.execute(total_stmt)
         total = total_result.scalar() or 0
 
-        pipeline_stmt = (
-            select(Order.pipeline_status, func.count())
-            .where(Order.owner_user_id == owner_user_id)
-            .group_by(Order.pipeline_status)
-        )
+        pipeline_stmt = select(Order.pipeline_status, func.count())
+        pipeline_stmt = pipeline_stmt.where(and_(*conditions) if conditions else true())
+        pipeline_stmt = pipeline_stmt.group_by(Order.pipeline_status)
         pipeline_result = await db.execute(pipeline_stmt)
         by_pipeline = {row[0]: row[1] for row in pipeline_result}
 
-        from app.models.audit_result import AuditResult
+        current = _current_result_subq()
 
         decision_stmt = (
-            select(AuditResult.decision, func.count())
+            select(current.c.decision, func.count())
             .select_from(Order)
-            .join(AuditResult, Order.id == AuditResult.order_id, isouter=True)
-            .where(Order.owner_user_id == owner_user_id)
-            .group_by(AuditResult.decision)
+            .join(
+                current,
+                and_(
+                    Order.id == current.c.order_id,
+                    Order.order_version == current.c.order_version,
+                ),
+                isouter=True,
+            )
         )
+        decision_stmt = decision_stmt.where(and_(*conditions) if conditions else true())
+        decision_stmt = decision_stmt.group_by(current.c.decision)
         decision_result = await db.execute(decision_stmt)
         by_decision = {row[0] or "PENDING": row[1] for row in decision_result}
 

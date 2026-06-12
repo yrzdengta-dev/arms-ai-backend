@@ -72,15 +72,24 @@ def normalize_date(date_str: str) -> str | None:
     if len(digits) >= 3:
         y, m, d = digits[0], digits[1], digits[2]
         if len(y) == 4:
-            return f"{y}-{m.zfill(2)}-{d.zfill(2)}"
+            try:
+                return datetime(int(y), int(m), int(d)).strftime("%Y-%m-%d")
+            except ValueError:
+                return None
     return None
+
+
+def date_match(source_value: str, pdf_value: str) -> bool:
+    source_date = normalize_date(source_value)
+    pdf_date = normalize_date(pdf_value)
+    return source_date is not None and pdf_date is not None and source_date == pdf_date
 
 
 MATCH_FUNCTIONS: dict[str, Callable[[str, str], bool]] = {
     "exact_match": exact_match,
     "normalized_match": normalized_match,
     "contains_match": contains_match,
-    "date_match": lambda sv, pv: normalize_date(sv) == normalize_date(pv),
+    "date_match": date_match,
 }
 
 
@@ -98,6 +107,11 @@ def evaluate_rule(
     rule_id = rule.get("id", rule.get("rule_id", "UNKNOWN"))
     rule_type = rule.get("type", "exact_match")
     required = rule.get("required", False)
+
+    # required_check is handled in _run_deterministic_rules before calling evaluate_rule.
+    # If it reaches here, skip gracefully.
+    if rule_type == "required_check":
+        return None
 
     # Missing required source
     if not source_value or not source_value.strip():

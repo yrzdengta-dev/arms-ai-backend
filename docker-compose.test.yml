@@ -1,0 +1,112 @@
+# Docker Compose for testing — isolated ports, test DB, no persistent volumes
+services:
+  api:
+    build: .
+    image: arms-backend:test
+    ports:
+      - "127.0.0.1:8001:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://arms:arms_test@postgres-test:5432/arms_test
+      REDIS_URL: redis://redis-test:6379/0
+      MINIO_ENDPOINT: minio-test:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: arms-pdfs-test
+      MINIO_SECURE: "false"
+      LLM_PROVIDER: fake
+      CELERY_BROKER_URL: redis://redis-test:6379/1
+      CELERY_RESULT_BACKEND: redis://redis-test:6379/2
+      PDF_MAX_SIZE_MB: "50"
+      PDF_DOWNLOAD_TIMEOUT_SECONDS: "120"
+      PDF_CONNECT_TIMEOUT_SECONDS: "30"
+      PDF_MAX_REDIRECTS: "5"
+      DEBUG: "false"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      minio-test:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  worker:
+    image: arms-backend:test
+    environment:
+      DATABASE_URL: postgresql+asyncpg://arms:arms_test@postgres-test:5432/arms_test
+      REDIS_URL: redis://redis-test:6379/0
+      MINIO_ENDPOINT: minio-test:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: arms-pdfs-test
+      MINIO_SECURE: "false"
+      LLM_PROVIDER: fake
+      CELERY_BROKER_URL: redis://redis-test:6379/1
+      CELERY_RESULT_BACKEND: redis://redis-test:6379/2
+      PDF_MAX_SIZE_MB: "50"
+      PDF_DOWNLOAD_TIMEOUT_SECONDS: "120"
+      PDF_CONNECT_TIMEOUT_SECONDS: "30"
+      PDF_MAX_REDIRECTS: "5"
+      DEBUG: "false"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      minio-test:
+        condition: service_healthy
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q pdf,audit_high,audit_normal,retry
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.workers.celery_app", "inspect", "ping", "-d", "celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: arms
+      POSTGRES_PASSWORD: arms_test
+      POSTGRES_DB: arms_test
+    ports:
+      - "127.0.0.1:5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arms -d arms_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio-test:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "127.0.0.1:9002:9000"
+      - "127.0.0.1:9003:9001"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

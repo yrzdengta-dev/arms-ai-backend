@@ -4,32 +4,50 @@ rules:
     description: "SKC must exactly match certificate"
     source_field: skc
     required: true
+    search_patterns:
+      - '(?i)SKC[:\s]*([A-Z]{2,4}-\d+)'
+      - '(?i)\b([A-Z]{2,4}-\d{6,})\b'
 
   - id: MATCH_PRODUCT_NAME
     type: normalized_match
     description: "Product name should match after normalization"
     source_field: product_name
     required: false
+    search_patterns:
+      - '(?i)Product[:\s]+(.{2,80})'
+      - '(?i)Product Name[:\s]+(.{2,80})'
+      - '(?i)Name of Product[:\s]+(.{2,80})'
 
   - id: MATCH_CERTIFICATE_SN
     type: contains_match
     description: "Certificate SN should appear in PDF"
     source_field: certificate_sn
     required: false
+    search_patterns:
+      - '(?i)Certificate No[.:\s]+([A-Z0-9-]+)'
+      - '(?i)Serial No[.:\s]+([A-Z0-9-]+)'
+      - '(?i)Cert No[.:\s]+([A-Z0-9-]+)'
 
   - id: MATCH_EFFECTIVE_DATE
     type: date_match
     description: "Effective date should match PDF"
     source_field: certificate_effective_date
     required: false
+    search_patterns:
+      - '(?i)(?:Effective|Issue|Valid From|Start Date)[\s:]*(\d{4}[-/]\d{2}[-/]\d{2})'
+      - '(?i)(?:Effective|Issue|Valid From|Start Date)[\s:]*(\d{1,2}\s\w+\s\d{4})'
 
   - id: MATCH_EXPIRE_DATE
     type: date_match
     description: "Expire date should match PDF"
     source_field: certificate_expire_date
     required: false
+    search_patterns:
+      - '(?i)(?:Expir(?:y|e)|Valid (?:Until|To)|End Date)[\s:]*(\d{4}[-/]\d{2}[-/]\d{2})'
+      - '(?i)(?:Expir(?:y|e)|Valid (?:Until|To)|End Date)[\s:]*(\d{1,2}\s\w+\s\d{4})'
 
   - id: CHECK_REQUIRED_FIELDS
     type: required_check
     description: "All required fields present"
+    source_field: _required_fields
     required: true
