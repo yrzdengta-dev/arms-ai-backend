@@ -20,6 +20,11 @@ class OrderIngestRequest(BaseModel):
     order_snapshot: dict[str, Any] = {}
     raw_detail: dict[str, Any] = {}
     pdf_files: list[PdfFileItem] = []
+    # ARMS manual audit result (oracle)
+    arms_audit_status: str | None = None
+    arms_audit_result: str | None = None
+    arms_reject_reason: str | None = None
+    arms_status_synced_at: datetime | None = None
 
 
 class BatchIngestRequest(BaseModel):
@@ -50,6 +55,8 @@ class OrderListItem(BaseModel):
     product_name: str | None = ""
     supplier_name: str | None = ""
     certificate_type_name: str | None = ""
+    arms_audit_status: str | None = None
+    arms_audit_result: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -80,6 +87,11 @@ class OrderDetailResponse(BaseModel):
     correction_history: list[dict[str, Any]] | None = None
     confirmed_by: str | None = None
     confirmed_at: datetime | None = None
+    # ARMS manual audit result (oracle)
+    arms_audit_status: str | None = None
+    arms_audit_result: str | None = None
+    arms_reject_reason: str | None = None
+    arms_status_synced_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

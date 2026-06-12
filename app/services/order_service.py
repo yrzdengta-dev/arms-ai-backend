@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.state_machine import PipelineStatus
+from app.core.time import utc_now
 from app.models.order import Order
 from app.models.user import User
 from app.repositories.event_repository import event_repository
@@ -57,6 +58,10 @@ class OrderService:
                 detail_hash=new_hash,
                 order_snapshot=request.order_snapshot,
                 raw_detail=request.raw_detail,
+                arms_audit_status=request.arms_audit_status,
+                arms_audit_result=request.arms_audit_result,
+                arms_reject_reason=request.arms_reject_reason,
+                arms_status_synced_at=_arms_synced_at(request),
             )
             db.add(order)
             await db.flush()
@@ -75,9 +80,17 @@ class OrderService:
             )
             return order, True
 
+        # Always refresh ARMS audit fields on re-ingest
+        existing.arms_audit_status = request.arms_audit_status
+        existing.arms_audit_result = request.arms_audit_result
+        existing.arms_reject_reason = request.arms_reject_reason
+        existing.arms_status_synced_at = _arms_synced_at(request)
+
         if existing.detail_hash == new_hash:
+            await db.flush()
+            await db.refresh(existing)
             logger.debug(
-                "Order unchanged task_order_id=%s order_id=%s",
+                "Order unchanged task_order_id=%s order_id=%s (arms fields refreshed)",
                 existing.task_order_id, existing.id,
             )
             return existing, False
@@ -150,6 +163,18 @@ async def _get_user_by_id(db: AsyncSession, user_id: str) -> User | None:
     from sqlalchemy import select
     result = await db.execute(select(User).where(User.id == user_id))
     return result.scalars().first()
+
+
+def _arms_synced_at(request: OrderIngestRequest) -> datetime | None:
+    """Return utc_now() if any arms_* field is explicitly provided (including empty string), else None."""
+    has_any = (
+        request.arms_audit_status is not None
+        or request.arms_audit_result is not None
+        or request.arms_reject_reason is not None
+    )
+    if has_any:
+        return utc_now()
+    return request.arms_status_synced_at  # explicit value or None
 
 
 async def _enqueue_order(

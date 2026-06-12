@@ -59,6 +59,8 @@ class OrderRepository:
         cert_type: str | None = None,
         created_after: datetime | None = None,
         created_before: datetime | None = None,
+        arms_audit_status: str | None = None,
+        arms_audit_result: str | None = None,
     ) -> Sequence[Order]:
         conditions: list = []
         if scope == "own":
@@ -91,6 +93,10 @@ class OrderRepository:
             conditions.append(Order.created_at >= created_after)
         if created_before is not None:
             conditions.append(Order.created_at <= created_before)
+        if arms_audit_status:
+            conditions.append(Order.arms_audit_status == arms_audit_status)
+        if arms_audit_result:
+            conditions.append(Order.arms_audit_result == arms_audit_result)
         if decision:
             from app.models.audit_result import AuditResult
 
@@ -125,6 +131,8 @@ class OrderRepository:
         cert_type: str | None = None,
         created_after: datetime | None = None,
         created_before: datetime | None = None,
+        arms_audit_status: str | None = None,
+        arms_audit_result: str | None = None,
     ) -> int:
         conditions: list = []
         if scope == "own":
@@ -157,6 +165,10 @@ class OrderRepository:
             conditions.append(Order.created_at >= created_after)
         if created_before is not None:
             conditions.append(Order.created_at <= created_before)
+        if arms_audit_status:
+            conditions.append(Order.arms_audit_status == arms_audit_status)
+        if arms_audit_result:
+            conditions.append(Order.arms_audit_result == arms_audit_result)
         if decision:
             from app.models.audit_result import AuditResult
 

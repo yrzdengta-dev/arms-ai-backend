@@ -34,6 +34,11 @@ class Order(Base):
     correction_history: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True, default=list)
     confirmed_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # ARMS manual audit result fields (oracle for AI accuracy measurement)
+    arms_audit_status: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    arms_audit_result: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    arms_reject_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    arms_status_synced_at: Mapped[datetime | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         default=utc_now, onupdate=utc_now, nullable=False

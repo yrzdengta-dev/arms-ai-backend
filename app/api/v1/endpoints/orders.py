@@ -101,6 +101,8 @@ async def list_orders(
     cert_type: str | None = Query(None),
     created_after: datetime | None = Query(None),
     created_before: datetime | None = Query(None),
+    arms_audit_status: str | None = Query(None),
+    arms_audit_result: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -120,6 +122,8 @@ async def list_orders(
         cert_type=cert_type,
         created_after=created_after,
         created_before=created_before,
+        arms_audit_status=arms_audit_status,
+        arms_audit_result=arms_audit_result,
         scope=scope,
     )
     total = await order_repository.count_orders(
@@ -134,6 +138,8 @@ async def list_orders(
         cert_type=cert_type,
         created_after=created_after,
         created_before=created_before,
+        arms_audit_status=arms_audit_status,
+        arms_audit_result=arms_audit_result,
         scope=scope,
     )
 
@@ -167,6 +173,8 @@ async def list_orders(
             product_name=(o.order_snapshot or {}).get("product_name", ""),
             supplier_name=(o.order_snapshot or {}).get("supplier_name", ""),
             certificate_type_name=(o.order_snapshot or {}).get("certificate_type_name", ""),
+            arms_audit_status=o.arms_audit_status,
+            arms_audit_result=o.arms_audit_result,
             created_at=o.created_at,
             updated_at=o.updated_at,
         )
@@ -214,6 +222,10 @@ async def get_order_detail(
         correction_history=order.correction_history,
         confirmed_by=order.confirmed_by,
         confirmed_at=order.confirmed_at,
+        arms_audit_status=order.arms_audit_status,
+        arms_audit_result=order.arms_audit_result,
+        arms_reject_reason=order.arms_reject_reason,
+        arms_status_synced_at=order.arms_status_synced_at,
         created_at=order.created_at,
         updated_at=order.updated_at,
     )
