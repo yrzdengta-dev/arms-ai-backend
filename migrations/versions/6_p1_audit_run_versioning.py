@@ -36,13 +36,23 @@ def upgrade() -> None:
         pass
 
     # 2. Add new columns if they don't exist
-    for col_name, col_type, col_default in [
-        ("protocol_version", "INTEGER", "1"),
-        ("status", "VARCHAR(32)", "'COMPLETED'"),
-        ("completed_at", "TIMESTAMP WITHOUT TIME ZONE", None),
-        ("rules_hash", "VARCHAR(128)", None),
+    for column in [
+        sa.Column(
+            "protocol_version",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("1"),
+        ),
+        sa.Column(
+            "status",
+            sa.String(length=32),
+            nullable=False,
+            server_default=sa.text("'COMPLETED'"),
+        ),
+        sa.Column("completed_at", sa.DateTime(), nullable=True),
+        sa.Column("rules_hash", sa.String(length=128), nullable=True),
     ]:
-        _add_column_if_not_exists("audit_results", col_name, col_type, col_default)
+        _add_column_if_not_exists("audit_results", column)
 
     # 3. Add new unique constraint (order_id, order_version, input_hash)
     if _is_postgresql(conn):
@@ -98,20 +108,17 @@ def downgrade() -> None:
         )
 
 
-def _add_column_if_not_exists(table: str, col_name: str, col_type: str, default: str | None) -> None:
+def _add_column_if_not_exists(table: str, column: sa.Column) -> None:
     conn = op.get_bind()
     result = conn.execute(
         sa.text(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_name = :table AND column_name = :col"
         ),
-        {"table": table, "col": col_name},
+        {"table": table, "col": column.name},
     )
     if result.fetchone() is None:
-        if default:
-            op.add_column(table, sa.Column(col_name, sa.Text, server_default=sa.text(default)))
-        else:
-            op.add_column(table, sa.Column(col_name, sa.Text, nullable=True))
+        op.add_column(table, column)
 
 
 def _is_postgresql(conn) -> bool:
